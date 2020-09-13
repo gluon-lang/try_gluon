@@ -2,8 +2,6 @@ use std::{fs, ops::Deref};
 
 use {
     futures::{future, prelude::*},
-    hyper::client::HttpConnector,
-    hyper_tls::HttpsConnector,
     serde::Serialize,
 };
 
@@ -19,6 +17,8 @@ use gluon::{
 };
 
 use structopt::StructOpt;
+
+type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
 
 pub fn load_master(thread: &Thread) -> vm::Result<ExternModule> {
     #[derive(Debug, VmType, Userdata, Trace)]
@@ -90,19 +90,19 @@ pub struct PostGist {
 #[derive(Debug, VmType, Userdata, Trace)]
 #[gluon(vm_type = "Github")]
 #[gluon_trace(skip)]
-struct Github(hubcaps::Github<HttpsConnector<HttpConnector>>);
+struct Github(hubcaps::Github);
 
 fn new_github(gist_access_token: &str) -> Github {
-    Github(hubcaps::Github::new(
-        "try_gluon".to_string(),
-        hubcaps::Credentials::Token(gist_access_token.into()),
-    ))
+    Github(
+        hubcaps::Github::new(
+            "try_gluon".to_string(),
+            hubcaps::Credentials::Token(gist_access_token.into()),
+        )
+        .unwrap(),
+    )
 }
 
-fn share(
-    github: &Github,
-    gist: Gist<'_>,
-) -> impl Future<Item = Result<PostGist, String>, Error = vm::Error> {
+fn share(github: &Github, gist: Gist<'_>) -> impl Future<Output = Result<PostGist, String>> {
     log::info!("Share: `{}`", gist.code);
 
     github
@@ -122,11 +122,30 @@ fn share(
             .collect(),
         })
         .map_err(|err| err.to_string())
-        .map(|response| PostGist {
+        .map_ok(|response| PostGist {
             id: response.id,
             html_url: response.html_url,
         })
-        .then(Ok)
+}
+
+#[cfg(unix)]
+async fn exit_server() -> Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut stream = futures::stream::select(
+        signal(SignalKind::interrupt())?,
+        signal(SignalKind::terminate())?,
+    );
+
+    match stream.next().await {
+        Some(()) => eprintln!("Signal received. Shutting down"),
+        None => eprintln!("Signal handler shutdown. Shutting down"),
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn exit_server() -> Result<()> {
+    Ok(tokio::signal::ctrl_c().await?)
 }
 
 #[derive(StructOpt, Pushable, VmType)]
@@ -158,47 +177,27 @@ struct Opts {
 }
 
 fn main() {
-    if let Err(err) = main_() {
-        eprintln!("{}\n{}", err, err.backtrace());
+    let opts = Opts::from_args();
+
+    let result = (|| {
+        let mut runtime = {
+            let mut builder = tokio::runtime::Builder::new();
+            if let Some(num_threads) = opts.num_threads {
+                builder.core_threads(num_threads);
+            }
+            builder.enable_all().threaded_scheduler().build()?
+        };
+        runtime.block_on(main_(opts))
+    })();
+    if let Err(err) = result {
+        eprintln!("{}", err);
     }
 }
 
-#[cfg(unix)]
-fn exit_server() -> impl Future<Item = (), Error = failure::Error> {
-    use tokio_signal::unix::{Signal, SIGINT, SIGTERM};
-    Signal::new(SIGINT)
-        .flatten_stream()
-        .select(Signal::new(SIGTERM).flatten_stream())
-        .into_future()
-        .map(|_| {
-            eprintln!("Signal received. Shutting down");
-        })
-        .map_err(|(err, _)| failure::format_err!("{}", err))
-}
-
-#[cfg(not(unix))]
-fn exit_server() -> impl Future<Item = (), Error = failure::Error> {
-    tokio_signal::ctrl_c()
-        .flatten_stream()
-        .into_future()
-        .map(|_| ())
-        .map_err(|(err, _)| failure::format_err!("{}", err))
-}
-
-fn main_() -> Result<(), failure::Error> {
+async fn main_(opts: Opts) -> Result<()> {
     env_logger::init();
 
-    let opts = Opts::from_args();
-
-    let mut runtime = {
-        let mut builder = tokio::runtime::Builder::new();
-        if let Some(num_threads) = opts.num_threads {
-            builder.core_threads(num_threads);
-        }
-        builder.build()?
-    };
-
-    let vm = gluon::new_vm();
+    let vm = gluon::new_vm_async().await;
     gluon::import::add_extern_module(&vm, "gluon.try", load);
     gluon::import::add_extern_module(&vm, "gluon.try.master", load_master);
     gluon::import::add_extern_module(&vm, "gluon.http_server", |vm| {
@@ -240,16 +239,23 @@ fn main_() -> Result<(), failure::Error> {
 
     let server_source = fs::read_to_string("src/app/server.glu")?;
 
-    let (_, _) = runtime.block_on(
-        future::lazy(move || {
-            vm.run_expr_async::<OwnedFunction<fn(Opts) -> IO<()>>>("src.app.server", &server_source)
-                .and_then(|(mut f, _)| f.call_async(opts).from_err())
-                .map_err(|err| failure::Error::from(err))
-                .map(|_| ())
-        })
-        .select(exit_server())
-        .map_err(|(err, _)| err),
-    )?;
+    future::try_select(
+        Box::pin(async move {
+            let (mut f, _) = vm
+                .run_expr_async::<OwnedFunction<fn(Opts) -> IO<()>>>(
+                    "src.app.server",
+                    &server_source,
+                )
+                .await?;
+            f.call_async(opts).await?;
+            Ok(())
+        }),
+        Box::pin(exit_server()),
+    )
+    .map_err(|either| match either {
+        futures::future::Either::Left((err, _)) | futures::future::Either::Right((err, _)) => err,
+    })
+    .await?;
 
     Ok(())
 }
