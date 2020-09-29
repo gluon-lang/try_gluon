@@ -40,7 +40,7 @@ resource "aws_ecs_service" "gluon-lang" {
   name            = "gluon-lang"
   cluster         = aws_ecs_cluster.gluon-lang.id
   task_definition = aws_ecs_task_definition.gluon_lang.arn
-  launch_type     = "FARGATE"
+  launch_type     = "EC2"
 
   desired_count = 1
 
@@ -77,3 +77,44 @@ resource "aws_security_group" "gluon_lang" {
     create_before_destroy = true
   }
 }
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+
+
+resource "aws_security_group" "launch" {
+  name          = "allow_ecs"
+  vpc_id = aws_vpc.aws-vpc.id
+}
+
+resource "aws_launch_configuration" "launch" {
+  name          = "web_config"
+  image_id      = data.aws_ami.ubuntu.id
+  security_groups = [aws_security_group.launch.id]
+  instance_type = "t2.micro"
+}
+
+resource "aws_instance" "gluon-lang" {
+  name = "gluon-lang"
+  ami                    = data.aws_ami.ubuntu.id
+  subnet_id              = aws_subnet.gluon-lang.id
+  instance_type          = "t2.nano"
+  vpc_security_group_ids = [aws_security_group.launch.id]
+  ebs_optimized          = "false"
+  source_dest_check      = "false"
+  associate_public_ip_address = "true"
+}
+
