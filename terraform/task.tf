@@ -9,8 +9,6 @@ locals {
   {
     "image": "marwes/try_gluon",
     "name": "gluon-lang",
-    "cpu": 0,
-    "memory": 128,
     "logConfiguration": {
       "logDriver": "awslogs",
       "options": {
@@ -29,10 +27,9 @@ resource "aws_ecs_task_definition" "gluon_lang" {
   family                   = "gluon-lang"
   task_role_arn            = aws_iam_role.ecs_task_role.arn
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  cpu                      = "256"
-  memory                   = "1024"
+  memory                   = "256"
   network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
+  requires_compatibilities = ["EC2"]
   container_definitions = local.container_definitions
 }
 
@@ -49,13 +46,12 @@ resource "aws_ecs_service" "gluon-lang" {
 
   network_configuration {
      subnets = aws_subnet.gluon-lang.*.id
-     assign_public_ip = "true"
 
-     security_groups = [aws_security_group.gluon_lang.id]
+     security_groups = [aws_security_group.gluon-lang.id]
   }
 }
 
-resource "aws_security_group" "gluon_lang" {
+resource "aws_security_group" "gluon-lang" {
   name_prefix = "gluon-lang-"
   vpc_id = aws_vpc.aws-vpc.id
 
@@ -78,43 +74,50 @@ resource "aws_security_group" "gluon_lang" {
   }
 }
 
-data "aws_ami" "ubuntu" {
+
+data "aws_ami" "ecs_optimized" {
   most_recent = true
+  owners = ["591542846629"] # AWS
 
   filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+      name   = "name"
+      values = ["*amazon-ecs-optimized"]
   }
 
   filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
+      name   = "virtualization-type"
+      values = ["hvm"]
   }
-
-  owners = ["099720109477"] # Canonical
-}
-
-
-resource "aws_security_group" "launch" {
-  name          = "allow_ecs"
-  vpc_id = aws_vpc.aws-vpc.id
 }
 
 resource "aws_launch_configuration" "launch" {
   name          = "web_config"
-  image_id      = data.aws_ami.ubuntu.id
-  security_groups = [aws_security_group.launch.id]
+  image_id      = data.aws_ami.ecs_optimized.id
+  security_groups = [aws_security_group.gluon-lang.id]
   instance_type = "t2.micro"
 }
 
+data "template_file" "user_data" {
+  template = "${file("${path.module}/user_data.yaml")}"
+
+  vars = {
+    ecs_cluster = "gluon-lang"
+  }
+}
+
 resource "aws_instance" "gluon-lang" {
-  name = "gluon-lang"
-  ami                    = data.aws_ami.ubuntu.id
+  ami                    = data.aws_ami.ecs_optimized.id
   subnet_id              = aws_subnet.gluon-lang.id
   instance_type          = "t2.nano"
-  vpc_security_group_ids = [aws_security_group.launch.id]
+  vpc_security_group_ids = [aws_security_group.gluon-lang.id]
   ebs_optimized          = "false"
   source_dest_check      = "false"
   associate_public_ip_address = "true"
+  iam_instance_profile = aws_iam_instance_profile.ecs_agent.name
+  user_data = data.template_file.user_data.rendered
 }
 
+resource "aws_iam_instance_profile" "ecs_agent" {
+  name = "ecs-agent"
+  role = aws_iam_role.ecs_agent.name
+}
