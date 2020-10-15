@@ -16,7 +16,15 @@ locals {
         "awslogs-group" : "${aws_cloudwatch_log_group.gluon-lang.name}",
         "awslogs-stream-prefix" : "gluon-lang"
       }
-    }
+    },
+    "portMappings": [
+        {
+            "containerPort": 80
+        },
+        {
+            "containerPort": 443
+        }
+    ]
   }
 ]
 DEFINITION
@@ -115,6 +123,7 @@ resource "aws_instance" "gluon-lang" {
   associate_public_ip_address = "true"
   iam_instance_profile = aws_iam_instance_profile.ecs_agent.name
   user_data = data.template_file.user_data.rendered
+  key_name = "home desktop"
 }
 
 resource "aws_iam_instance_profile" "ecs_agent" {
