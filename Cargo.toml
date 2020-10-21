@@ -34,7 +34,7 @@ structopt = "0.3"
 tokio = { version = "0.2", features = ["signal", "rt-core", "rt-threaded"] }
 hyper = "0.13"
 
-gluon = { version = "0.17", features = ["serialization", "regex", "rand"] }
+gluon = { version = "0.17", features = ["serialization", "regex", "rand", "web"] }
 gluon_codegen = { version = "0.17" }
 
 #gluon = { path = "../gluon", features = ["serialization", "web", "regex", "rand"] }
@@ -53,3 +53,7 @@ tokio = { version = "0.2", features = ["macros"] }
 
 [features]
 server = ["gluon/web"]
+
+[profile.release]
+lto = "fat"
+debug = false

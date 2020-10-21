@@ -1,4 +1,4 @@
-FROM ekidd/rust-musl-builder:1.44.0 as dependencies
+FROM ekidd/rust-musl-builder:1.47.0 as dependencies
 
 WORKDIR /usr/src/try_gluon
 

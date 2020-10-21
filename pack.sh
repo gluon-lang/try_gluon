@@ -1,6 +1,7 @@
 #!/bin/bash
 
-cp bootstrap /lib/x86_64-linux-gnu/libssl.so* target/release/ \
-    && cd target/release \
-    && zip lambda.zip libssl.so* bootstrap try_gluon
+rm target/release/lambda.zip
+cp bootstrap /lib64/ld-linux-x86-64.so* target/ \
+    && cd target \
+    && zip lambda.zip bootstrap try_gluon
 
