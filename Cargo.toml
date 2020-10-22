@@ -25,7 +25,7 @@ env_logger = "0.7"
 anyhow = "1"
 futures = "0.3"
 hubcaps = { version = "0.5", git = "https://github.com/Marwes/hubcaps", branch = "std_future" }
-lambda_runtime = "0.2"
+lambda_runtime = { git = "https://github.com/awslabs/aws-lambda-rust-runtime", package = "lambda" }
 log = "0.4"
 serde = "1"
 serde_derive = "1"
@@ -53,7 +53,3 @@ tokio = { version = "0.2", features = ["macros"] }
 
 [features]
 server = ["gluon/web"]
-
-[profile.release]
-lto = "fat"
-debug = false
